@@ -103,8 +103,8 @@
         }
 
         async init() {
-            this.bgImages = await this.fetchImageList('./bg/_list.txt');
-            this.overlayImages = await this.fetchImageList('./img/_list.txt');
+            this.bgImages = await this.fetchImageList('bg/_list.txt');
+            this.overlayImages = await this.fetchImageList('img/_list.txt');
 
             this.changeBackgroundImage();
             this.changeOverlayImages();

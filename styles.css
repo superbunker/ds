@@ -1,0 +1,70 @@
+
+body {
+	background-color: #000;
+	background-image: url('/images/a-losangeles-sky-64-2.gif')repeat;
+	text-align: center; 
+	margin: 0; padding: 0;
+	height: 100%;
+	overflow: hidden;
+}
+
+
+
+#slides1 {
+
+}
+
+
+
+
+/*
+.rslides {
+  position: relative;
+  list-style: none;
+  overflow: hidden;
+  width: 100%;
+  padding: 0;
+  margin: 0;
+  }
+*/
+
+.rslides {
+  list-style: none;
+  overflow: hidden;
+	width: 100%;
+	margin:0 auto;
+	padding:0;
+	position: absolute;
+	margin-left: auto;
+	margin-right: auto;
+	left: 0;
+	right: 0;
+	text-align: center;
+}
+
+.rslides li {
+  -webkit-backface-visibility: hidden;
+  position: absolute;
+  display: none;
+  width: 100%;
+  left: 0;
+  top: 0;
+  }
+
+.rslides li:first-child {
+  position: relative;
+  display: block;
+  float: left;
+  }
+
+.rslides img {
+  display: block;
+  height: auto;
+  float: left;
+  width: 100%;
+  border: 0;
+  }
+  
+#slides2  {
+	top: 10%;
+}

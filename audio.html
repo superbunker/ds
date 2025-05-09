@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Simple Background Audio Example</title>
+  <style>
+    #audiobtn {
+      position: fixed; bottom:20px; right:20px; z-index:1000;
+      width:48px; height:48px;
+      border-radius:50%; border:none; background:#111; color:#fff; font-size:2em; cursor:pointer;
+    }
+  </style>
+</head>
+<body>
+
+<button id="audiobtn">▶️</button>
+
+<script>
+const loopCount = 2; // how many loops at once
+const effectIntervalMin = 6, effectIntervalMax = 16; // seconds
+const LOOP_FILES = 4;   // numbered 1-N
+const EFFECT_FILES = 4; // numbered 1-N
+
+let loops = [];
+let running = false;
+let effectTimer = null;
+
+function randInt(min, max) {
+  return Math.floor(Math.random()*(max-min+1))+min;
+}
+
+function playRandomLoop(idx) {
+  if (!running) return;
+  let n = randInt(1, LOOP_FILES);
+  let audio = new Audio(`/audio/loops/${n}.mp3`);
+  audio.loop = false;
+  audio.volume = 0.4;
+  audio.addEventListener('ended', () => { playRandomLoop(idx); });
+  audio.play();
+  // Save so we can stop later
+  loops[idx] = audio;
+}
+
+function playEffect() {
+  if (!running) return;
+  let n = randInt(1, EFFECT_FILES);
+  let audio = new Audio(`/audio/sounds/${n}.mp3`);
+  audio.volume = 0.7;
+  audio.play();
+  // Schedule next
+  let nextIn = randInt(effectIntervalMin, effectIntervalMax)*1000;
+  effectTimer = setTimeout(playEffect, nextIn);
+}
+
+function startAudio() {
+  if (running) return;
+  running = true;
+  // Kick off background loops
+  for (let i=0; i<loopCount; ++i) playRandomLoop(i);
+  playEffect();
+  document.getElementById('audiobtn').innerText = "🔊";
+}
+
+function stopAudio() {
+  running = false;
+  // Stop loops
+  loops.forEach(a => { if (a) {a.pause(); a.src="";} });
+  loops = [];
+  if (effectTimer) clearTimeout(effectTimer);
+  document.getElementById('audiobtn').innerText = "▶️";
+}
+
+// Handle user gesture for autoplay
+document.getElementById('audiobtn').onclick = function() {
+  if (!running) {
+    startAudio();
+  } else {
+    stopAudio();
+  }
+};
+</script>
+</body>
+</html>

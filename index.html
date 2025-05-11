@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Layered GIF Canvas Player (ES Modules)</title>
+<title>Optimized Layered GIF Canvas Player</title>
 <style>
   html, body {
     margin: 0; padding: 0; height: 100%; overflow: hidden;
@@ -33,10 +33,9 @@
 
 <script type="module">
     /* esm.sh bundles gifuct-js and all its deps into a single file.
-       “?bundle” guarantees there are NO further imports.              */
-    import { parseGIF, decompressFrames } from
+       "?bundle" guarantees there are NO further imports.              */
+    import { parseGIF, decompressFrames } from 
       'https://esm.sh/gifuct-js@2.1.2?bundle';
-
 
 // Utility: fetch text file lines trimmed
 async function fetchList(path) {
@@ -46,51 +45,39 @@ async function fetchList(path) {
   return text.split('\n').map(s => s.trim()).filter(Boolean);
 }
 
-// Utility: load static image as ImageBitmap
-async function loadImageBitmap(url) {
-  const img = await new Promise((resolve, reject) => {
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = reject;
-    image.src = url;
-  });
-  return await createImageBitmap(img);
-}
+// Pattern source cache - Safari compatibility
+const patternSourceCache = new WeakMap();
 
-/* ────────────────────────────────────────────────────────────
-   Helper: return something Safari accepts for createPattern
-   (Canvas, <img>, <video> or null) and cache bitmap→canvas
-   ──────────────────────────────────────────────────────────── */
-   function patternSource(frame) {
-  if (!frame) return null;                            // nothing
-
-  // Safari refuses ImageBitmap
+// Get a Safari-compatible pattern source (Canvas or Image element)
+function getPatternSource(frame) {
+  if (!frame) return null;
+  
+  // Safari refuses ImageBitmap for createPattern
   if (frame instanceof ImageBitmap) {
-    let c = patternSource.cache.get(frame);
-    if (!c) {
-      c = document.createElement('canvas');
-      c.width = frame.width;
-      c.height = frame.height;
-      c.getContext('2d').drawImage(frame, 0, 0);
-      patternSource.cache.set(frame, c);
+    let canvas = patternSourceCache.get(frame);
+    if (!canvas) {
+      canvas = document.createElement('canvas');
+      canvas.width = frame.width;
+      canvas.height = frame.height;
+      canvas.getContext('2d').drawImage(frame, 0, 0);
+      patternSourceCache.set(frame, canvas);
     }
-    return c;
+    return canvas;
   }
-
-  // guard against zero-sized canvases
-  if (!frame.width || !frame.height) return null;
-
-  return frame;                                      // already OK
+  
+  // Guard against zero-sized canvases
+  if (frame.width === 0 || frame.height === 0) return null;
+  
+  return frame; // Already a compatible element
 }
-patternSource.cache = new WeakMap();
 
-
-// Decode GIF into frames (ImageBitmaps) and frame durations
+// Decode GIF into frames and durations
 async function decodeGif(arrayBuffer) {
   const gif = parseGIF(arrayBuffer);
   const frames = decompressFrames(gif, true);
-  const bitmaps = [];
+  const canvasFrames = [];
+  
+  // Create canvas frames - works in all browsers including Safari
   for (const frame of frames) {
     const canvas = document.createElement('canvas');
     canvas.width = frame.dims.width;
@@ -99,49 +86,64 @@ async function decodeGif(arrayBuffer) {
     const imageData = ctx.createImageData(frame.dims.width, frame.dims.height);
     imageData.data.set(frame.patch);
     ctx.putImageData(imageData, 0, 0);
-    // const bitmap = await createImageBitmap(canvas);
-    // bitmaps.push(bitmap);
-    bitmaps.push(canvas);              // canvas works in all browsers
+    canvasFrames.push(canvas);
   }
-  const delays = frames.map(f => (f.delay || 10) * 10); // delay is 10ms units, default 100ms
-  return { frames: bitmaps, delays, width: gif.lsd.width, height: gif.lsd.height };
+  
+  return {
+    frames: canvasFrames,
+    delays: frames.map(f => (f.delay || 10) * 10), // delay is in 10ms units, default 100ms
+    width: gif.lsd.width,
+    height: gif.lsd.height
+  };
 }
 
-// Load either static image or GIF decoded frames
+// Unified media loading for both static images and GIFs
 async function loadMedia(url) {
   if (url.toLowerCase().endsWith('.gif')) {
     const resp = await fetch(url);
     if (!resp.ok) throw new Error(`Failed to load ${url}`);
-    const buffer = await resp.arrayBuffer();
-    const gifData = await decodeGif(buffer);
-    return gifData;
+    return await decodeGif(await resp.arrayBuffer());
   } else {
-    const bitmap = await loadImageBitmap(url);
+    // For static images, create and load an Image element (Safari-friendly)
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+    
+    // Create a canvas from the image for consistent handling
+    const canvas = document.createElement('canvas');
+    canvas.width = image.width;
+    canvas.height = image.height;
+    canvas.getContext('2d').drawImage(image, 0, 0);
+    
     return {
-      frames: [bitmap],
+      frames: [canvas],
       delays: [1000], // 1s static frame
-      width: bitmap.width,
-      height: bitmap.height
+      width: image.width,
+      height: image.height
     };
   }
 }
 
-// Layer class holds current and next image data + animation/crossfade info
+// Layer class for animation management
 class Layer {
   constructor(name, isTiled = false) {
     this.name = name;
     this.isTiled = isTiled;
-
+    
     this.current = null;    // { frames, delays, width, height }
     this.next = null;
-
+    
     this.currentStart = 0;  // timestamp when current animation started
     this.nextStart = null;  // timestamp when crossfade started
-
+    
     this.crossfadeDuration = 2000; // ms
     this.crossfading = false;
   }
-
+  
   setCurrent(imageData, timestamp) {
     this.current = imageData;
     this.currentStart = timestamp;
@@ -149,213 +151,253 @@ class Layer {
     this.next = null;
     this.nextStart = null;
   }
-
+  
   setNext(imageData, timestamp) {
     this.next = imageData;
     this.nextStart = timestamp;
     this.crossfading = true;
   }
-
+  
+  // Get the current animation frame based on timing
+  getCurrentFrame(timestamp) {
+    if (!this.current) return null;
+    const frameIndex = this.getFrameIndex(this.current, this.currentStart, timestamp);
+    return this.current.frames[frameIndex];
+  }
+  
+  // Get the next animation frame if available
+  getNextFrame(timestamp) {
+    if (!this.next) return null;
+    const frameIndex = this.getFrameIndex(this.next, this.nextStart, timestamp);
+    return this.next.frames[frameIndex];
+  }
+  
+  // Calculate animation frame index based on timing
   getFrameIndex(imageData, startTime, now) {
-    if (!imageData) return 0;
+    if (!imageData || !imageData.frames.length) return 0;
+    
     const elapsed = now - startTime;
-    const totalDuration = imageData.delays.reduce((a,b) => a + b, 0);
-    let t = elapsed % totalDuration;
-    for(let i=0; i<imageData.frames.length; i++) {
-      if (t < imageData.delays[i]) return i;
-      t -= imageData.delays[i];
+    const totalDuration = imageData.delays.reduce((a, b) => a + b, 0);
+    
+    // Handle single-frame images
+    if (imageData.frames.length === 1) return 0;
+    
+    // Calculate frame for multi-frame animations
+    let time = elapsed % totalDuration;
+    for (let i = 0; i < imageData.frames.length; i++) {
+      if (time < imageData.delays[i]) return i;
+      time -= imageData.delays[i];
     }
     return 0;
   }
+  
+  // Calculate fade progress
+  getFadeProgress(timestamp) {
+    if (!this.crossfading || !this.nextStart) return 0;
+    return Math.min((timestamp - this.nextStart) / this.crossfadeDuration, 1);
+  }
 }
 
-// Main player managing layers and animation
+// Main player class
 class LayeredGifPlayer {
   constructor(canvas, loadingEl) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
     this.loadingEl = loadingEl;
-
-    this.bgList = [];
-    this.overlayList = [];
-
-    this.bgLayer = new Layer("background", true);
-    this.ov1Layer = new Layer("overlay1");
-    this.ov2Layer = new Layer("overlay2");
-
+    
+    // Create layers
+    this.layers = {
+      background: new Layer("background", true),
+      overlay1: new Layer("overlay1", false),
+      overlay2: new Layer("overlay2", false)
+    };
+    
+    // Change intervals
+    this.changeIntervals = {
+      background: 12000,
+      overlay1: 7000,
+      overlay2: 7000
+    };
+    
+    // Next change times
+    this.nextChangeTime = {
+      background: 0,
+      overlay1: 0,
+      overlay2: 0
+    };
+    
+    // Image lists
+    this.imageLists = {
+      background: [],
+      overlay: []
+    };
+    
+    // Canvas dimensions
     this.width = window.innerWidth;
     this.height = window.innerHeight;
-
     this.canvas.width = this.width;
     this.canvas.height = this.height;
-
-    this.lastTimestamp = 0;
-    this.bgChangeInterval = 12000;
-    this.ovChangeInterval = 7000;
-
-    this.nextBgChange = 0;
-    this.nextOvChange = 0;
-
+    
+    // Handle window resize
     window.addEventListener('resize', () => this.onResize());
   }
-
+  
   async init() {
     this.loadingEl.textContent = "Loading image lists...";
-    this.bgList = await fetchList('./bg/_list.txt');
-    this.overlayList = await fetchList('./img/_list.txt');
-
+    
+    // Load image lists
+    this.imageLists.background = await fetchList('./bg/_list.txt');
+    this.imageLists.overlay = await fetchList('./img/_list.txt');
+    
     this.loadingEl.textContent = "Loading initial images...";
     await this.loadInitialImages();
-
+    
     this.loadingEl.style.display = 'none';
-
+    
+    // Start animation loop
     requestAnimationFrame(timestamp => this.loop(timestamp));
   }
-
+  
   async loadInitialImages() {
     const now = performance.now();
-
-    this.bgLayer.setCurrent(await this.loadRandomImage(this.bgList, true), now);
-    this.bgLayer.setNext(await this.loadRandomImage(this.bgList, true), now);
-
-    this.ov1Layer.setCurrent(await this.loadRandomImage(this.overlayList), now);
-    this.ov1Layer.setNext(await this.loadRandomImage(this.overlayList), now);
-
-    this.ov2Layer.setCurrent(await this.loadRandomImage(this.overlayList), now);
-    this.ov2Layer.setNext(await this.loadRandomImage(this.overlayList), now);
+    
+    // Load all initial images
+    this.layers.background.setCurrent(
+      await this.loadRandomImage('background'), now);
+    this.layers.overlay1.setCurrent(
+      await this.loadRandomImage('overlay'), now);
+    this.layers.overlay2.setCurrent(
+      await this.loadRandomImage('overlay'), now);
   }
-
-  async loadRandomImage(list, isTiled = false) {
+  
+  async loadRandomImage(type) {
+    const list = type === 'background' ? this.imageLists.background : this.imageLists.overlay;
     const file = list[Math.floor(Math.random() * list.length)];
-    const url = (isTiled ? './bg/' : './img/') + file;
+    const url = (type === 'background' ? './bg/' : './img/') + file;
+    
     try {
-      const media = await loadMedia(url);
-      return media;
+      return await loadMedia(url);
     } catch(e) {
       console.error("Error loading image", url, e);
       return null;
     }
   }
-
+  
   onResize() {
     this.width = window.innerWidth;
     this.height = window.innerHeight;
     this.canvas.width = this.width;
     this.canvas.height = this.height;
   }
-
-  async swapNextImages(timestamp) {
-    // Background
-    if (timestamp > this.nextBgChange) {
-      if (!this.bgLayer.crossfading) {
-        this.bgLayer.setNext(await this.loadRandomImage(this.bgList, true), timestamp);
-        this.bgLayer.crossfading = true;
-        this.bgLayer.nextStart = timestamp;
-        this.nextBgChange = timestamp + this.bgChangeInterval;
-      } else if (timestamp - this.bgLayer.nextStart >= this.bgLayer.crossfadeDuration) {
-        this.bgLayer.setCurrent(this.bgLayer.next, timestamp);
-        this.bgLayer.next = null;
-        this.bgLayer.crossfading = false;
-      }
-    }
-
-    // Overlay layers
-    if (timestamp > this.nextOvChange) {
-      if (!this.ov1Layer.crossfading) {
-        this.ov1Layer.setNext(await this.loadRandomImage(this.overlayList), timestamp);
-        this.ov2Layer.setNext(await this.loadRandomImage(this.overlayList), timestamp);
-        this.ov1Layer.crossfading = this.ov2Layer.crossfading = true;
-        this.ov1Layer.nextStart = this.ov2Layer.nextStart = timestamp;
-        this.nextOvChange = timestamp + this.ovChangeInterval;
-      } else if (timestamp - this.ov1Layer.nextStart >= this.ov1Layer.crossfadeDuration) {
-        this.ov1Layer.setCurrent(this.ov1Layer.next, timestamp);
-        this.ov1Layer.next = null;
-        this.ov1Layer.crossfading = false;
-
-        this.ov2Layer.setCurrent(this.ov2Layer.next, timestamp);
-        this.ov2Layer.next = null;
-        this.ov2Layer.crossfading = false;
+  
+  // Handle layer transitions
+  async handleLayerChanges(timestamp) {
+    const layerKeys = Object.keys(this.layers);
+    
+    for (const key of layerKeys) {
+      const layer = this.layers[key];
+      const isBackground = key === 'background';
+      
+      if (timestamp > this.nextChangeTime[key]) {
+        if (!layer.crossfading) {
+          // Start new crossfade
+          const newMedia = await this.loadRandomImage(isBackground ? 'background' : 'overlay');
+          layer.setNext(newMedia, timestamp);
+          this.nextChangeTime[key] = timestamp + this.changeIntervals[key];
+        } else if (timestamp - layer.nextStart >= layer.crossfadeDuration) {
+          // Complete crossfade
+          layer.setCurrent(layer.next, timestamp);
+        }
       }
     }
   }
-
-  drawLayer(layer, timestamp) {
-    if (!layer.current) return;
+  
+  // Draw centered frame (for non-tiled layers)
+  drawCenteredFrame(frame, alpha) {
+    if (!frame) return;
+    
     const ctx = this.ctx;
-
-    const fadeProgress = layer.crossfading && layer.nextStart
-      ? Math.min((timestamp - layer.nextStart)/layer.crossfadeDuration, 1)
-      : 0;
-
-    // Current image frame
-    const currentFrameIdx = layer.getFrameIndex(layer.current, layer.currentStart, timestamp);
-    const currentFrame = layer.current.frames[currentFrameIdx];
-
-    // Next image frame (if crossfading)
-    let nextFrame = null;
-    if (layer.crossfading && layer.next) {
-      const nextFrameIdx = layer.getFrameIndex(layer.next, layer.nextStart, timestamp);
-      nextFrame = layer.next.frames[nextFrameIdx];
-    }
-
+    ctx.globalAlpha = alpha;
+    
+    // Calculate centered position with scaling
+    const scale = Math.min(this.width / frame.width, this.height / frame.height);
+    const dw = frame.width * scale;
+    const dh = frame.height * scale;
+    const dx = (this.width - dw) / 2;
+    const dy = (this.height - dh) / 2;
+    
+    ctx.drawImage(frame, dx, dy, dw, dh);
+  }
+  
+  // Draw a single layer
+  drawLayer(layer) {
+    if (!layer.current) return;
+    
+    const ctx = this.ctx;
+    const currentFrame = layer.getCurrentFrame(this.timestamp);
+    const nextFrame = layer.getNextFrame(this.timestamp);
+    const fadeProgress = layer.getFadeProgress(this.timestamp);
+    
     ctx.save();
-
+    
     if (layer.isTiled) {
-      const src1 = patternSource(currentFrame);
-      const src2 = patternSource(nextFrame);
-
+      // Draw tiled background
+      const src1 = getPatternSource(currentFrame);
       if (src1) {
         ctx.globalAlpha = 1 - fadeProgress;
-        ctx.fillStyle   = ctx.createPattern(src1, 'repeat');
+        ctx.fillStyle = ctx.createPattern(src1, 'repeat');
         ctx.fillRect(0, 0, this.width, this.height);
       }
-      if (fadeProgress > 0 && src2) {
-        ctx.globalAlpha = fadeProgress;
-        ctx.fillStyle   = ctx.createPattern(src2, 'repeat');
-        ctx.fillRect(0, 0, this.width, this.height);
+      
+      // Draw next tiled background if crossfading
+      if (fadeProgress > 0 && nextFrame) {
+        const src2 = getPatternSource(nextFrame);
+        if (src2) {
+          ctx.globalAlpha = fadeProgress;
+          ctx.fillStyle = ctx.createPattern(src2, 'repeat');
+          ctx.fillRect(0, 0, this.width, this.height);
+        }
       }
     } else {
-      // Center overlays with scaling
-      const drawFrame = (frame, alpha) => {
-        if (!frame) return;
-        ctx.globalAlpha = alpha;
-        const scale = Math.min(this.width / frame.width, this.height / frame.height);
-        const dw = frame.width * scale;
-        const dh = frame.height * scale;
-        const dx = (this.width - dw) / 2;
-        const dy = (this.height - dh) / 2;
-        ctx.drawImage(frame, dx, dy, dw, dh);
-      };
-      drawFrame(currentFrame, 1 - fadeProgress);
-      if (nextFrame) drawFrame(nextFrame, fadeProgress);
+      // Draw centered overlay
+      this.drawCenteredFrame(currentFrame, 1 - fadeProgress);
+      
+      // Draw next overlay if crossfading
+      if (fadeProgress > 0 && nextFrame) {
+        this.drawCenteredFrame(nextFrame, fadeProgress);
+      }
     }
-
+    
     ctx.restore();
   }
-
+  
+  // Main animation loop
   async loop(timestamp) {
-    if (!this.lastTimestamp) this.lastTimestamp = timestamp;
-    const elapsed = timestamp - this.lastTimestamp;
-    this.lastTimestamp = timestamp;
-
-    await this.swapNextImages(timestamp);
-
+    this.timestamp = timestamp;
+    
+    // Handle layer changes and transitions
+    await this.handleLayerChanges(timestamp);
+    
+    // Clear canvas
     this.ctx.clearRect(0, 0, this.width, this.height);
-
-    this.drawLayer(this.bgLayer, timestamp);
-    this.drawLayer(this.ov1Layer, timestamp);
-    this.drawLayer(this.ov2Layer, timestamp);
-
+    
+    // Draw layers in order
+    this.drawLayer(this.layers.background);
+    this.drawLayer(this.layers.overlay1);
+    this.drawLayer(this.layers.overlay2);
+    
+    // Continue animation
     requestAnimationFrame(t => this.loop(t));
   }
 }
 
 // Main startup
-const canvas = document.getElementById('canvas');
-const loadingEl = document.getElementById('loading');
-
 async function main() {
+  const canvas = document.getElementById('canvas');
+  const loadingEl = document.getElementById('loading');
+  
   const player = new LayeredGifPlayer(canvas, loadingEl);
+  
   try {
     await player.init();
   } catch (e) {
@@ -363,6 +405,7 @@ async function main() {
     console.error(e);
   }
 }
+
 main();
 </script>
 

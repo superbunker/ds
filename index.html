@@ -37,6 +37,7 @@
     import { parseGIF, decompressFrames } from
       'https://esm.sh/gifuct-js@2.1.2?bundle';
 
+
 // Utility: fetch text file lines trimmed
 async function fetchList(path) {
   const res = await fetch(path);
@@ -56,6 +57,34 @@ async function loadImageBitmap(url) {
   });
   return await createImageBitmap(img);
 }
+
+/* ────────────────────────────────────────────────────────────
+   Helper: return something Safari accepts for createPattern
+   (Canvas, <img>, <video> or null) and cache bitmap→canvas
+   ──────────────────────────────────────────────────────────── */
+   function patternSource(frame) {
+  if (!frame) return null;                            // nothing
+
+  // Safari refuses ImageBitmap
+  if (frame instanceof ImageBitmap) {
+    let c = patternSource.cache.get(frame);
+    if (!c) {
+      c = document.createElement('canvas');
+      c.width = frame.width;
+      c.height = frame.height;
+      c.getContext('2d').drawImage(frame, 0, 0);
+      patternSource.cache.set(frame, c);
+    }
+    return c;
+  }
+
+  // guard against zero-sized canvases
+  if (!frame.width || !frame.height) return null;
+
+  return frame;                                      // already OK
+}
+patternSource.cache = new WeakMap();
+
 
 // Decode GIF into frames (ImageBitmaps) and frame durations
 async function decodeGif(arrayBuffer) {
@@ -272,17 +301,17 @@ class LayeredGifPlayer {
     ctx.save();
 
     if (layer.isTiled) {
-      // Tile background frame
-      if (!currentFrame) return;
-      const pattern = ctx.createPattern(currentFrame, 'repeat');
-      ctx.globalAlpha = 1 - fadeProgress;
-      ctx.fillStyle = pattern;
-      ctx.fillRect(0, 0, this.width, this.height);
+      const src1 = patternSource(currentFrame);
+      const src2 = patternSource(nextFrame);
 
-      if (nextFrame) {
-        const pattern2 = ctx.createPattern(nextFrame, 'repeat');
+      if (src1) {
+        ctx.globalAlpha = 1 - fadeProgress;
+        ctx.fillStyle   = ctx.createPattern(src1, 'repeat');
+        ctx.fillRect(0, 0, this.width, this.height);
+      }
+      if (fadeProgress > 0 && src2) {
         ctx.globalAlpha = fadeProgress;
-        ctx.fillStyle = pattern2;
+        ctx.fillStyle   = ctx.createPattern(src2, 'repeat');
         ctx.fillRect(0, 0, this.width, this.height);
       }
     } else {

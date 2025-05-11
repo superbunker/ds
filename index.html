@@ -243,13 +243,13 @@ class LayeredGifPlayer {
   }
   
   async init() {
-    this.loadingEl.textContent = "Loading image lists...";
+    this.loadingEl.textContent = "Obtaining retrofuture...";
     
     // Load image lists
     this.imageLists.background = await fetchList('./bg/_list.txt');
     this.imageLists.overlay = await fetchList('./img/_list.txt');
     
-    this.loadingEl.textContent = "Loading initial images...";
+    this.loadingEl.textContent = "Entering hellscape...";
     await this.loadInitialImages();
     
     this.loadingEl.style.display = 'none';
